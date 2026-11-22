@@ -1,0 +1,1354 @@
+<!DOCTYPE html>
+<html lang="ja" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Whitespace Machine - 難解言語実行＆デバッグマシン</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        machine: {
+                            bg: '#0b0f17',
+                            panel: '#131a26',
+                            border: '#232f42',
+                            accent: '#00f0ff',
+                            space: '#38bdf8',
+                            tab: '#c084fc',
+                            lf: '#34d399',
+                            warn: '#fbbf24',
+                            err: '#f87171'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* カスタムスクロールバーと機械風の微調整 */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0b0f17;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #232f42;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #334460;
+        }
+
+        /* トークンバッジのスタイル */
+        .tok-s {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background-color: rgba(56, 189, 248, 0.18);
+            color: #38bdf8;
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            border-radius: 3px;
+            padding: 0 2px;
+            margin: 1px;
+            font-size: 0.85em;
+            min-width: 1.2em;
+            user-select: none;
+        }
+        .tok-t {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background-color: rgba(192, 132, 252, 0.18);
+            color: #c084fc;
+            border: 1px solid rgba(192, 132, 252, 0.35);
+            border-radius: 3px;
+            padding: 0 3px;
+            margin: 1px;
+            font-size: 0.85em;
+            min-width: 1.6em;
+            user-select: none;
+        }
+        .tok-l {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background-color: rgba(52, 211, 153, 0.18);
+            color: #34d399;
+            border: 1px solid rgba(52, 211, 153, 0.35);
+            border-radius: 3px;
+            padding: 0 3px;
+            margin: 1px;
+            font-size: 0.85em;
+            user-select: none;
+        }
+        .cursor-blink {
+            display: inline-block;
+            width: 2px;
+            height: 1.1em;
+            background-color: #00f0ff;
+            vertical-align: middle;
+            animation: blink 1s step-end infinite;
+        }
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+        /* タップ時のハイライト無効化（スマホでの連打快適化） */
+        button {
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+    </style>
+</head>
+<body class="bg-machine-bg text-slate-200 font-sans min-h-screen flex flex-col pb-44 sm:pb-36 selection:bg-cyan-500/30">
+
+    <!-- トースト通知（alert代替） -->
+    <div id="toast-container" class="fixed top-4 right-4 left-4 sm:left-auto sm:w-80 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+    <!-- ヘッダー -->
+    <header class="bg-machine-panel border-b border-machine-border sticky top-0 z-30 shadow-lg">
+        <div class="max-w-6xl mx-auto px-3 py-2.5 flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+                <div class="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-400/40 flex items-center justify-center text-cyan-400 font-mono font-bold shadow-[0_0_10px_rgba(0,240,255,0.2)]">
+                    WS
+                </div>
+                <div>
+                    <h1 class="text-sm sm:text-base font-bold tracking-wider text-white flex items-center gap-1.5">
+                        WHITESPACE MACHINE
+                        <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">v2.6</span>
+                    </h1>
+                    <p class="text-[10px] text-slate-400 hidden sm:block">空白文字専用 仮想スタックマシン＆デバッガ</p>
+                </div>
+            </div>
+
+            <!-- サンプル選択＆コピー機能 -->
+            <div class="flex items-center gap-1.5">
+                <select id="preset-select" onchange="loadPreset(this.value)" class="bg-slate-900 border border-machine-border text-xs rounded-lg px-2 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-400 max-w-[135px] sm:max-w-none">
+                    <option value="">📂 サンプル読込...</option>
+                    <option value="hello">1. Hello, World!</option>
+                    <option value="count">2. 1から10までカウント</option>
+                    <option value="add">3. 入力2数値の足し算</option>
+                    <option value="fib">4. フィボナッチ数列</option>
+                </select>
+                <button onclick="openMacroModal()" class="bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/40 text-xs font-semibold px-2.5 py-1.5 rounded-lg flex items-center gap-1 transition">
+                    <span>⚡</span><span class="hidden sm:inline">命令挿入</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- メインコンテンツ -->
+    <main class="max-w-6xl w-full mx-auto px-3 pt-3 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-3">
+
+        <!-- 左カラム：コードエディタ＆コントロール (7カラム) -->
+        <section class="lg:col-span-7 flex flex-col gap-3">
+            
+            <!-- エディタパネル -->
+            <div class="bg-machine-panel border border-machine-border rounded-xl overflow-hidden flex flex-col shadow-md">
+                <!-- エディタヘッダー -->
+                <div class="px-3 py-2 bg-slate-900/60 border-b border-machine-border flex flex-wrap items-center justify-between gap-2">
+                    <div class="flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                        <span class="text-xs font-bold tracking-wide text-slate-300">CODE MEMORY</span>
+                        <span id="char-stats" class="text-[11px] font-mono text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                            S:0 T:0 L:0 (計0)
+                        </span>
+                    </div>
+                    
+                    <div class="flex items-center gap-1.5">
+                        <!-- 表示モード切替 -->
+                        <button id="toggle-vis-btn" onclick="toggleVisualMode()" class="text-[11px] font-mono px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 transition">
+                            👁️ 可視化: ON
+                        </button>
+                        <!-- コピーメニュー -->
+                        <div class="relative inline-block">
+                            <button onclick="copyCode('raw')" title="純粋な空白としてコピー" class="text-[11px] px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+                                📋 空白コピー
+                            </button>
+                            <button onclick="copyCode('visual')" title="可視化文字としてコピー" class="text-[11px] px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+                                📋 記号コピー
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- コード表示・編集エリア -->
+                <div class="relative min-h-[190px] max-h-[280px] overflow-y-auto p-3 font-mono text-sm leading-relaxed bg-[#080b11]" id="editor-container">
+                    <!-- 可視化ビュー -->
+                    <div id="visual-editor" class="whitespace-pre-wrap break-all min-h-[160px] cursor-text" onclick="focusRawEditor()"></div>
+                    <!-- 純粋空白テキストエリア（モード切替時または直接入力用） -->
+                    <textarea id="raw-editor" spellcheck="false" placeholder="下の専用キーパッドから Space / Tab / LF を入力してください..."
+                        class="hidden w-full h-[170px] bg-transparent text-slate-100 font-mono text-sm focus:outline-none resize-none whitespace-pre"></textarea>
+                </div>
+
+                <!-- 実行コントロールバー -->
+                <div class="p-2.5 bg-slate-900/90 border-t border-machine-border flex flex-wrap items-center justify-between gap-2">
+                    <div class="flex items-center gap-1.5">
+                        <button onclick="runAll()" class="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs sm:text-sm px-3.5 py-2 rounded-lg shadow-[0_0_12px_rgba(6,182,212,0.4)] flex items-center gap-1 transition active:scale-95">
+                            <span>▶</span> 実行 (Run)
+                        </button>
+                        <button onclick="stepExecution()" class="bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/50 font-semibold text-xs sm:text-sm px-3 py-2 rounded-lg flex items-center gap-1 transition active:scale-95">
+                            <span>⏭</span> ステップ
+                        </button>
+                        <button onclick="resetVM()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs sm:text-sm px-2.5 py-2 rounded-lg transition active:scale-95">
+                            ↺ リセット
+                        </button>
+                    </div>
+                    <div class="text-[11px] font-mono text-slate-400 flex items-center gap-2">
+                        <span>STEP: <strong id="step-counter" class="text-white">0</strong></span>
+                        <span id="vm-status-badge" class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">READY</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 入出力（I/O）パネル -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <!-- 標準入力 (STDIN) -->
+                <div class="bg-machine-panel border border-machine-border rounded-xl p-3 flex flex-col gap-1.5">
+                    <div class="flex items-center justify-between">
+                        <label for="stdin-input" class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                            <span class="text-purple-400">📥</span> 標準入力 (STDIN)
+                        </label>
+                        <span class="text-[10px] text-slate-500">数値入力は改行区切り</span>
+                    </div>
+                    <textarea id="stdin-input" rows="2" placeholder="例: 15&#10;27"
+                        class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs font-mono text-slate-200 focus:outline-none focus:border-purple-400 resize-none"></textarea>
+                </div>
+
+                <!-- 標準出力 (STDOUT) -->
+                <div class="bg-machine-panel border border-machine-border rounded-xl p-3 flex flex-col gap-1.5">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                            <span class="text-emerald-400">📟</span> 標準出力 (STDOUT)
+                        </span>
+                        <button onclick="clearOutput()" class="text-[10px] text-slate-400 hover:text-white underline">クリア</button>
+                    </div>
+                    <div id="stdout-output" class="w-full h-[54px] overflow-y-auto bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs font-mono text-emerald-400 whitespace-pre-wrap break-all"></div>
+                </div>
+            </div>
+
+            <!-- エラー表示ボックス -->
+            <div id="error-box" class="hidden bg-red-950/60 border border-red-500/50 text-red-200 rounded-xl p-3 text-xs font-mono flex items-start gap-2">
+                <span class="text-base">⚠️</span>
+                <div id="error-message" class="flex-1 break-words"></div>
+            </div>
+        </section>
+
+        <!-- 右カラム：デバッガ（スタック・ヒープ・逆アセンブル） (5カラム) -->
+        <section class="lg:col-span-5 flex flex-col gap-3">
+            
+            <!-- スタック & ヒープ モニタ -->
+            <div class="grid grid-cols-2 gap-3">
+                <!-- スタック -->
+                <div class="bg-machine-panel border border-machine-border rounded-xl overflow-hidden flex flex-col h-44">
+                    <div class="px-3 py-1.5 bg-slate-900/70 border-b border-machine-border flex justify-between items-center">
+                        <span class="text-xs font-bold text-cyan-300">📚 STACK</span>
+                        <span id="stack-count" class="text-[10px] font-mono text-slate-400">0 items</span>
+                    </div>
+                    <div id="stack-view" class="p-2 overflow-y-auto flex-1 font-mono text-xs flex flex-col-reverse justify-end gap-1">
+                        <div class="text-slate-600 text-center my-auto text-[11px]">EMPTY</div>
+                    </div>
+                </div>
+
+                <!-- ヒープ -->
+                <div class="bg-machine-panel border border-machine-border rounded-xl overflow-hidden flex flex-col h-44">
+                    <div class="px-3 py-1.5 bg-slate-900/70 border-b border-machine-border flex justify-between items-center">
+                        <span class="text-xs font-bold text-purple-300">🗄️ HEAP</span>
+                        <span id="heap-count" class="text-[10px] font-mono text-slate-400">0 keys</span>
+                    </div>
+                    <div id="heap-view" class="p-2 overflow-y-auto flex-1 font-mono text-xs flex flex-col gap-1">
+                        <div class="text-slate-600 text-center my-auto text-[11px]">EMPTY</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 解析済み命令一覧 (Disassembly) -->
+            <div class="bg-machine-panel border border-machine-border rounded-xl overflow-hidden flex flex-col flex-1 min-h-[220px] max-h-[340px]">
+                <div class="px-3 py-2 bg-slate-900/70 border-b border-machine-border flex justify-between items-center">
+                    <span class="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                        <span>🔍</span> 解析済み命令 (DISASSEMBLY)
+                    </span>
+                    <span id="inst-count" class="text-[10px] font-mono text-slate-400">0 instructions</span>
+                </div>
+                <div id="disasm-view" class="p-2 overflow-y-auto flex-1 font-mono text-xs space-y-1">
+                    <div class="text-slate-500 text-center py-8">コードを入力すると命令が自動解析されます</div>
+                </div>
+            </div>
+
+        </section>
+    </main>
+
+    <!-- スマホ最適化：画面下部固定 専用入力キーパッド -->
+    <footer class="fixed bottom-0 left-0 right-0 bg-slate-950/95 backdrop-blur-md border-t border-cyan-500/30 p-2 sm:p-3 z-40 shadow-[0_-4px_20px_rgba(0,0,0,0.6)]">
+        <div class="max-w-3xl mx-auto flex flex-col gap-1.5">
+            <!-- 上段：Space / Tab / LF の大きな入力ボタン -->
+            <div class="grid grid-cols-3 gap-2">
+                <button onclick="insertToken(' ')" class="bg-sky-500/15 hover:bg-sky-500/25 active:bg-sky-500/40 border border-sky-400/50 text-sky-300 rounded-xl py-2.5 sm:py-3 flex flex-col items-center justify-center shadow-sm transition active:scale-95">
+                    <span class="font-mono font-bold text-base sm:text-lg leading-none">␣ Space</span>
+                    <span class="text-[10px] text-sky-400/80 mt-0.5">空白 (0x20)</span>
+                </button>
+                <button onclick="insertToken('\t')" class="bg-purple-500/15 hover:bg-purple-500/25 active:bg-purple-500/40 border border-purple-400/50 text-purple-300 rounded-xl py-2.5 sm:py-3 flex flex-col items-center justify-center shadow-sm transition active:scale-95">
+                    <span class="font-mono font-bold text-base sm:text-lg leading-none">→ Tab</span>
+                    <span class="text-[10px] text-purple-400/80 mt-0.5">タブ (0x09)</span>
+                </button>
+                <button onclick="insertToken('\n')" class="bg-emerald-500/15 hover:bg-emerald-500/25 active:bg-emerald-500/40 border border-emerald-400/50 text-emerald-300 rounded-xl py-2.5 sm:py-3 flex flex-col items-center justify-center shadow-sm transition active:scale-95">
+                    <span class="font-mono font-bold text-base sm:text-lg leading-none">↵ LF</span>
+                    <span class="text-[10px] text-emerald-400/80 mt-0.5">改行 (0x0A)</span>
+                </button>
+            </div>
+
+            <!-- 下段：補助操作ボタン -->
+            <div class="grid grid-cols-3 gap-2">
+                <button onclick="openMacroModal()" class="bg-indigo-600/25 hover:bg-indigo-600/40 border border-indigo-400/40 text-indigo-200 rounded-lg py-1.5 text-xs font-semibold flex items-center justify-center gap-1 transition active:scale-95">
+                    <span>⚡</span> 命令パレット
+                </button>
+                <button onclick="backspaceToken()" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg py-1.5 text-xs font-semibold flex items-center justify-center gap-1 transition active:scale-95">
+                    <span>⌫</span> 1文字削除
+                </button>
+                <button onclick="requestClearCode()" class="bg-red-950/50 hover:bg-red-900/60 border border-red-800/50 text-red-300 rounded-lg py-1.5 text-xs font-semibold flex items-center justify-center gap-1 transition active:scale-95">
+                    <span>🗑️</span> 全消去
+                </button>
+            </div>
+        </div>
+    </footer>
+
+    <!-- マクロ・命令挿入モーダル -->
+    <div id="macro-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 hidden items-center justify-center p-3">
+        <div class="bg-machine-panel border border-machine-border rounded-2xl max-w-lg w-full max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            <div class="px-4 py-3 bg-slate-900 border-b border-machine-border flex items-center justify-between">
+                <h2 class="text-sm font-bold text-white flex items-center gap-2">
+                    <span class="text-indigo-400">⚡</span> Whitespace 命令ジェネレータ
+                </h2>
+                <button onclick="closeMacroModal()" class="text-slate-400 hover:text-white text-lg px-2">✕</button>
+            </div>
+            
+            <div class="p-4 overflow-y-auto space-y-4 text-xs">
+                <!-- 数値・ラベル指定付き命令 -->
+                <div class="bg-slate-900/70 border border-slate-800 rounded-xl p-3 space-y-2.5">
+                    <div class="font-bold text-cyan-300">1. パラメータ付き命令を挿入</div>
+                    <div class="flex gap-2">
+                        <input type="number" id="macro-num-input" value="65" placeholder="数値 (例: 65)"
+                            class="w-1/2 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 font-mono text-white focus:outline-none focus:border-cyan-400">
+                        <button onclick="insertMacroNumber('push')" class="flex-1 bg-cyan-600/30 hover:bg-cyan-600/50 border border-cyan-500/50 text-cyan-200 font-semibold rounded-lg py-1.5 transition">
+                            Push (数値を積む)
+                        </button>
+                    </div>
+                    <div class="flex gap-2">
+                        <input type="text" id="macro-char-input" maxlength="1" value="A" placeholder="1文字 (例: A)"
+                            class="w-1/2 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 font-mono text-white focus:outline-none focus:border-cyan-400">
+                        <button onclick="insertMacroChar()" class="flex-1 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 text-emerald-200 font-semibold rounded-lg py-1.5 transition">
+                            文字Push + OutChar
+                        </button>
+                    </div>
+                    <div class="flex gap-2 items-center">
+                        <input type="number" id="macro-label-input" value="0" min="0" placeholder="ラベル番号 (0, 1...)"
+                            class="w-1/3 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 font-mono text-white focus:outline-none focus:border-purple-400">
+                        <button onclick="insertMacroLabel('mark')" class="flex-1 bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/50 text-purple-200 rounded-lg py-1.5 transition">
+                            Label定義
+                        </button>
+                        <button onclick="insertMacroLabel('jmp')" class="flex-1 bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/50 text-purple-200 rounded-lg py-1.5 transition">
+                            Jump移動
+                        </button>
+                        <button onclick="insertMacroLabel('jz')" class="flex-1 bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/50 text-purple-200 rounded-lg py-1.5 transition">
+                            Jump(0時)
+                        </button>
+                    </div>
+                </div>
+
+                <!-- ワンタップ基本命令 -->
+                <div class="space-y-2">
+                    <div class="font-bold text-slate-300">2. ワンタップ基本命令</div>
+                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 font-mono">
+                        <button onclick="insertRawMacro('\t\n  ', 'OutChar (文字出力)')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-left">
+                            <div class="text-emerald-300 font-bold">OutChar</div>
+                            <div class="text-[10px] text-slate-400">[T][L][S][S]</div>
+                        </button>
+                        <button onclick="insertRawMacro('\t\n \t', 'OutNum (数値出力)')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-left">
+                            <div class="text-emerald-300 font-bold">OutNum</div>
+                            <div class="text-[10px] text-slate-400">[T][L][S][T]</div>
+                        </button>
+                        <button onclick="insertRawMacro('\t\n\t ', 'ReadChar (文字読込)')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-left">
+                            <div class="text-purple-300 font-bold">ReadChar</div>
+                            <div class="text-[10px] text-slate-400">[T][L][T][S]</div>
+                        </button>
+                        <button onclick="insertRawMacro('\t\n\t\t', 'ReadNum (数値読込)')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-left">
+                            <div class="text-purple-300 font-bold">ReadNum</div>
+                            <div class="text-[10px] text-slate-400">[T][L][T][T]</div>
+                        </button>
+                        <button onclick="insertRawMacro(' \n ', 'Dup (複製)')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-left">
+                            <div class="text-sky-300 font-bold">Dup</div>
+                            <div class="text-[10px] text-slate-400">[S][L][S]</div>
+                        </button>
+                        <button onclick="insertRawMacro(' \n\t', 'Swap (交換)')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-left">
+                            <div class="text-sky-300 font-bold">Swap</div>
+                            <div class="text-[10px] text-slate-400">[S][L][T]</div>
+                        </button>
+                        <button onclick="insertRawMacro(' \n\n', 'Discard (破棄)')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-left">
+                            <div class="text-sky-300 font-bold">Discard</div>
+                            <div class="text-[10px] text-slate-400">[S][L][L]</div>
+                        </button>
+                        <button onclick="insertRawMacro('\t   ', 'Add (加算 +)')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-left">
+                            <div class="text-amber-300 font-bold">Add (+)</div>
+                            <div class="text-[10px] text-slate-400">[T][S][S][S]</div>
+                        </button>
+                        <button onclick="insertRawMacro('\t  \t', 'Sub (減算 -)')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-left">
+                            <div class="text-amber-300 font-bold">Sub (-)</div>
+                            <div class="text-[10px] text-slate-400">[T][S][S][T]</div>
+                        </button>
+                        <button onclick="insertRawMacro('\t  \n', 'Mul (乗算 *)')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-left">
+                            <div class="text-amber-300 font-bold">Mul (*)</div>
+                            <div class="text-[10px] text-slate-400">[T][S][S][L]</div>
+                        </button>
+                        <button onclick="insertRawMacro('\t\t ', 'Store (ヒープ保存)')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-left">
+                            <div class="text-pink-300 font-bold">Store</div>
+                            <div class="text-[10px] text-slate-400">[T][T][S]</div>
+                        </button>
+                        <button onclick="insertRawMacro('\t\t\t', 'Retrieve (ヒープ取得)')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-left">
+                            <div class="text-pink-300 font-bold">Retrieve</div>
+                            <div class="text-[10px] text-slate-400">[T][T][T]</div>
+                        </button>
+                        <button onclick="insertRawMacro('\n\n\n', 'End (プログラム終了)')" class="p-2 bg-red-950/60 hover:bg-red-900/60 rounded-lg border border-red-800/60 text-left col-span-2 sm:col-span-3">
+                            <div class="text-red-300 font-bold">END PROGRAM (終了)</div>
+                            <div class="text-[10px] text-red-400/80">[L][L][L] - 実行を正常終了します</div>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 全消去確認モーダル（confirm()の代替） -->
+    <div id="confirm-clear-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 hidden items-center justify-center p-4">
+        <div class="bg-machine-panel border border-machine-border rounded-2xl max-w-xs w-full p-4 space-y-4 shadow-2xl">
+            <h3 class="text-sm font-bold text-white">コードの全消去</h3>
+            <p class="text-xs text-slate-300">現在入力されているWhitespaceコードをすべて消去しますか？</p>
+            <div class="flex justify-end gap-2">
+                <button onclick="closeConfirmClear()" class="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs">キャンセル</button>
+                <button onclick="executeClearCode()" class="px-3 py-1.5 rounded-lg bg-red-600 text-white font-bold text-xs">消去する</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * ==========================================
+         * 1. グローバル状態管理
+         * ==========================================
+         */
+        let rawCode = "";           // 純粋な ' ', '\t', '\n' のみを含むコード文字列
+        let isVisualMode = true;    // true: トークン可視化表示, false: 純粋空白表示
+        let parsedInstructions = []; // パース済み命令オブジェクト配列
+        let labelMap = {};          // ラベル文字列 -> 命令インデックス のマップ
+
+        // 仮想マシン (VM) 状態
+        const vm = {
+            pc: 0,
+            stack: [],
+            heap: {},
+            callStack: [],
+            steps: 0,
+            maxSteps: 10000,
+            halted: false,
+            error: null,
+            stdinBuffer: "",
+            stdinPointer: 0,
+            stdout: ""
+        };
+
+        /**
+         * ==========================================
+         * 2. トースト通知＆カスタムモーダル制御
+         * ==========================================
+         */
+        function showToast(msg, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const el = document.createElement('div');
+            const colors = {
+                info: 'bg-slate-900/95 border-cyan-500/50 text-cyan-200',
+                success: 'bg-emerald-950/95 border-emerald-500/50 text-emerald-200',
+                warn: 'bg-amber-950/95 border-amber-500/50 text-amber-200',
+                error: 'bg-red-950/95 border-red-500/50 text-red-200'
+            };
+            el.className = `px-3 py-2 rounded-xl border text-xs font-semibold shadow-lg backdrop-blur-md transition-all duration-300 ${colors[type] || colors.info}`;
+            el.textContent = msg;
+            container.appendChild(el);
+            setTimeout(() => {
+                el.style.opacity = '0';
+                el.style.transform = 'translateY(-6px)';
+                setTimeout(() => el.remove(), 300);
+            }, 2200);
+        }
+
+        function openMacroModal() {
+            const modal = document.getElementById('macro-modal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+        function closeMacroModal() {
+            const modal = document.getElementById('macro-modal');
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+        function requestClearCode() {
+            if (!rawCode) return;
+            const modal = document.getElementById('confirm-clear-modal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+        function closeConfirmClear() {
+            const modal = document.getElementById('confirm-clear-modal');
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+        function executeClearCode() {
+            rawCode = "";
+            syncEditorFromCode();
+            resetVM();
+            closeConfirmClear();
+            showToast("コードを全消去しました", "info");
+        }
+
+        /**
+         * ==========================================
+         * 3. エディタ入力・可視化レンダリング
+         * ==========================================
+         */
+        const rawEditorEl = document.getElementById('raw-editor');
+        const visualEditorEl = document.getElementById('visual-editor');
+
+        // 純粋空白テキストエリアからの直接編集イベント
+        rawEditorEl.addEventListener('input', (e) => {
+            // Whitespace文字（Space, Tab, LF）以外をフィルタリング（CRはLFに正規化）
+            const cleaned = e.target.value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/[^ \t\n]/g, '');
+            if (cleaned !== e.target.value) {
+                e.target.value = cleaned;
+            }
+            rawCode = cleaned;
+            updateStatsAndParse();
+            resetVM(true);
+        });
+
+        function toggleVisualMode() {
+            isVisualMode = !isVisualMode;
+            const btn = document.getElementById('toggle-vis-btn');
+            if (isVisualMode) {
+                btn.textContent = "👁️ 可視化: ON";
+                btn.classList.replace('text-slate-400', 'text-cyan-300');
+                rawEditorEl.classList.add('hidden');
+                visualEditorEl.classList.remove('hidden');
+                renderVisualEditor();
+            } else {
+                btn.textContent = "👁️ 可視化: OFF (純粋空白)";
+                btn.classList.replace('text-cyan-300', 'text-slate-400');
+                visualEditorEl.classList.add('hidden');
+                rawEditorEl.classList.remove('hidden');
+                rawEditorEl.value = rawCode;
+                rawEditorEl.focus();
+            }
+        }
+
+        function focusRawEditor() {
+            // 可視化モードクリック時のフィードバック
+            if (!isVisualMode) rawEditorEl.focus();
+        }
+
+        // トークン1文字追加（専用キーパッド用）
+        function insertToken(ch) {
+            rawCode += ch;
+            syncEditorFromCode();
+            resetVM(true);
+            // スクロールを最下部へ追従
+            const container = document.getElementById('editor-container');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // 1文字削除
+        function backspaceToken() {
+            if (rawCode.length === 0) return;
+            rawCode = rawCode.slice(0, -1);
+            syncEditorFromCode();
+            resetVM(true);
+        }
+
+        // エディタ表示とパーサの同期
+        function syncEditorFromCode() {
+            rawEditorEl.value = rawCode;
+            renderVisualEditor();
+            updateStatsAndParse();
+        }
+
+        // 可視化HTMLの生成
+        function renderVisualEditor() {
+            if (rawCode.length === 0) {
+                visualEditorEl.innerHTML = `<span class="text-slate-600 text-xs select-none">下の [␣ Space] [→ Tab] [↵ LF] キーをタップするか、右上の「サンプル読込」を選択してください...</span><span class="cursor-blink ml-1"></span>`;
+                return;
+            }
+            let html = '';
+            for (let i = 0; i < rawCode.length; i++) {
+                const c = rawCode[i];
+                if (c === ' ') {
+                    html += `<span class="tok-s">␣</span>`;
+                } else if (c === '\t') {
+                    html += `<span class="tok-t">→</span>`;
+                } else if (c === '\n') {
+                    html += `<span class="tok-l">↵</span><br>`;
+                }
+            }
+            html += `<span class="cursor-blink ml-0.5"></span>`;
+            visualEditorEl.innerHTML = html;
+        }
+
+        function updateStatsAndParse() {
+            let s = 0, t = 0, l = 0;
+            for (const c of rawCode) {
+                if (c === ' ') s++;
+                else if (c === '\t') t++;
+                else if (c === '\n') l++;
+            }
+            document.getElementById('char-stats').textContent = `S:${s} T:${t} L:${l} (計${rawCode.length})`;
+            parseWhitespace(rawCode);
+            renderDisassembly();
+        }
+
+        // クリップボードコピー（iFrame互換 execCommand 使用）
+        function copyCode(mode) {
+            if (!rawCode) {
+                showToast("コピーするコードがありません", "warn");
+                return;
+            }
+            let textToCopy = rawCode;
+            if (mode === 'visual') {
+                textToCopy = rawCode.replace(/ /g, '␣').replace(/\t/g, '→').replace(/\n/g, '↵\n');
+            }
+            const temp = document.createElement('textarea');
+            temp.value = textToCopy;
+            document.body.appendChild(temp);
+            temp.select();
+            try {
+                document.execCommand('copy');
+                showToast(mode === 'raw' ? "純粋な空白コードをコピーしました！" : "可視化記号テキストをコピーしました！", "success");
+            } catch (err) {
+                showToast("コピーに失敗しました", "error");
+            }
+            document.body.removeChild(temp);
+        }
+
+        /**
+         * ==========================================
+         * 4. Whitespace パーサ（構文解析・逆アセンブル）
+         * ==========================================
+         */
+        function encodeNumberToWS(num) {
+            const n = parseInt(num, 10);
+            if (isNaN(n)) return ' \n'; // 0
+            if (n === 0) return '  \n'; // 符号(正=Space) + 0(Space) + 終端(LF)
+            const sign = n >= 0 ? ' ' : '\t';
+            const bin = Math.abs(n).toString(2).replace(/0/g, ' ').replace(/1/g, '\t');
+            return sign + bin + '\n';
+        }
+
+        function encodeLabelToWS(labelIndex) {
+            const n = Math.max(0, parseInt(labelIndex, 10) || 0);
+            const bin = n.toString(2).replace(/0/g, ' ').replace(/1/g, '\t');
+            return bin + '\n';
+        }
+
+        // マクロ挿入ヘルパー
+        function insertMacroNumber(type) {
+            const val = document.getElementById('macro-num-input').value;
+            if (type === 'push') {
+                const ws = '  ' + encodeNumberToWS(val);
+                insertRawMacro(ws, `Push ${val || 0}`);
+            }
+        }
+        function insertMacroChar() {
+            const ch = document.getElementById('macro-char-input').value;
+            if (!ch) return;
+            const code = ch.charCodeAt(0);
+            const ws = '  ' + encodeNumberToWS(code) + '\t\n  ';
+            insertRawMacro(ws, `Push '${ch}' (${code}) & OutChar`);
+        }
+        function insertMacroLabel(kind) {
+            const lbl = document.getElementById('macro-label-input').value;
+            const encodedLbl = encodeLabelToWS(lbl);
+            if (kind === 'mark') {
+                insertRawMacro('\n  ' + encodedLbl, `Label ${lbl}`);
+            } else if (kind === 'jmp') {
+                insertRawMacro('\n \n' + encodedLbl, `Jump -> Label ${lbl}`);
+            } else if (kind === 'jz') {
+                insertRawMacro('\n\t ' + encodedLbl, `JumpZero -> Label ${lbl}`);
+            }
+        }
+        function insertRawMacro(wsSeq, desc) {
+            rawCode += wsSeq;
+            syncEditorFromCode();
+            resetVM(true);
+            closeMacroModal();
+            showToast(`挿入: ${desc}`, "success");
+        }
+
+        // Whitespace 構文解析エンジン
+        function parseWhitespace(code) {
+            parsedInstructions = [];
+            labelMap = {};
+            let pos = 0;
+            const len = code.length;
+
+            // パラメータ（数値）読み取り
+            function readNumber() {
+                if (pos >= len) return { error: "数値パラメータの途中でコードが終了しました" };
+                const signChar = code[pos++];
+                if (signChar === '\n') return { error: "数値に符号(Space/Tab)がありません" };
+                const sign = (signChar === ' ') ? 1 : -1;
+                let binStr = "";
+                while (pos < len && code[pos] !== '\n') {
+                    binStr += (code[pos] === ' ') ? '0' : '1';
+                    pos++;
+                }
+                if (pos >= len) return { error: "数値の終端(LF)が見つかりません" };
+                pos++; // LFを消費
+                const val = binStr.length === 0 ? 0 : parseInt(binStr, 2) * sign;
+                return { value: val };
+            }
+
+            // パラメータ（ラベル）読み取り
+            function readLabel() {
+                let rawLbl = "";
+                while (pos < len && code[pos] !== '\n') {
+                    rawLbl += (code[pos] === ' ') ? 'S' : 'T';
+                    pos++;
+                }
+                if (pos >= len) return { error: "ラベルの終端(LF)が見つかりません" };
+                pos++; // LFを消費
+                // 人間が読みやすいラベル名も併記
+                const numAlias = rawLbl.length > 0 ? parseInt(rawLbl.replace(/S/g, '0').replace(/T/g, '1'), 2) : 0;
+                return { value: rawLbl, display: rawLbl === "" ? "L_EMPTY" : `L_${numAlias}(${rawLbl})` };
+            }
+
+            while (pos < len) {
+                const startPos = pos;
+                const imp = code[pos++];
+
+                if (imp === ' ') {
+                    // [IMP: Space] スタック操作
+                    if (pos >= len) {
+                        parsedInstructions.push({ op: 'ERR', text: '不完全なスタック命令', raw: code.slice(startPos) });
+                        break;
+                    }
+                    const cmd = code[pos++];
+                    if (cmd === ' ') {
+                        const num = readNumber();
+                        if (num.error) {
+                            parsedInstructions.push({ op: 'ERR', text: `PUSH エラー: ${num.error}`, raw: code.slice(startPos) });
+                            break;
+                        }
+                        parsedInstructions.push({ op: 'PUSH', arg: num.value, text: `PUSH ${num.value}`, raw: code.slice(startPos, pos) });
+                    } else if (cmd === '\n') {
+                        if (pos >= len) {
+                            parsedInstructions.push({ op: 'ERR', text: '不完全なスタック命令', raw: code.slice(startPos) });
+                            break;
+                        }
+                        const sub = code[pos++];
+                        if (sub === ' ') parsedInstructions.push({ op: 'DUP', text: 'DUP (複製)', raw: code.slice(startPos, pos) });
+                        else if (sub === '\t') parsedInstructions.push({ op: 'SWAP', text: 'SWAP (交換)', raw: code.slice(startPos, pos) });
+                        else if (sub === '\n') parsedInstructions.push({ op: 'DISCARD', text: 'DISCARD (破棄)', raw: code.slice(startPos, pos) });
+                    } else if (cmd === '\t') {
+                        if (pos >= len) {
+                            parsedInstructions.push({ op: 'ERR', text: '不完全なスタック拡張命令', raw: code.slice(startPos) });
+                            break;
+                        }
+                        const sub = code[pos++];
+                        const num = readNumber();
+                        if (num.error) {
+                            parsedInstructions.push({ op: 'ERR', text: `スタック拡張エラー: ${num.error}`, raw: code.slice(startPos) });
+                            break;
+                        }
+                        if (sub === ' ') parsedInstructions.push({ op: 'COPY', arg: num.value, text: `COPY ${num.value}`, raw: code.slice(startPos, pos) });
+                        else if (sub === '\n') parsedInstructions.push({ op: 'SLIDE', arg: num.value, text: `SLIDE ${num.value}`, raw: code.slice(startPos, pos) });
+                        else parsedInstructions.push({ op: 'ERR', text: '未知のスタック命令 [S][T][T]', raw: code.slice(startPos, pos) });
+                    }
+                } else if (imp === '\t') {
+                    if (pos >= len) {
+                        parsedInstructions.push({ op: 'ERR', text: '不完全な [Tab] IMP命令', raw: code.slice(startPos) });
+                        break;
+                    }
+                    const imp2 = code[pos++];
+                    if (imp2 === ' ') {
+                        // [IMP: Tab Space] 算術演算
+                        if (pos + 1 >= len) {
+                            parsedInstructions.push({ op: 'ERR', text: '不完全な算術命令', raw: code.slice(startPos) });
+                            break;
+                        }
+                        const op1 = code[pos++];
+                        const op2 = code[pos++];
+                        const map = {
+                            '  ': ['ADD', 'ADD (+)'],
+                            ' \t': ['SUB', 'SUB (-)'],
+                            ' \n': ['MUL', 'MUL (*)'],
+                            '\t ': ['DIV', 'DIV (/)'],
+                            '\t\t': ['MOD', 'MOD (%)']
+                        };
+                        const found = map[op1 + op2];
+                        if (found) parsedInstructions.push({ op: found[0], text: found[1], raw: code.slice(startPos, pos) });
+                        else parsedInstructions.push({ op: 'ERR', text: '未知の算術命令', raw: code.slice(startPos, pos) });
+                    } else if (imp2 === '\t') {
+                        // [IMP: Tab Tab] ヒープ操作
+                        if (pos >= len) {
+                            parsedInstructions.push({ op: 'ERR', text: '不完全なヒープ命令', raw: code.slice(startPos) });
+                            break;
+                        }
+                        const op = code[pos++];
+                        if (op === ' ') parsedInstructions.push({ op: 'STORE', text: 'STORE (ヒープ保存)', raw: code.slice(startPos, pos) });
+                        else if (op === '\t') parsedInstructions.push({ op: 'RETRIEVE', text: 'RETRIEVE (ヒープ読出)', raw: code.slice(startPos, pos) });
+                        else parsedInstructions.push({ op: 'ERR', text: '未知のヒープ命令 [T][T][L]', raw: code.slice(startPos, pos) });
+                    } else if (imp2 === '\n') {
+                        // [IMP: Tab LF] I/O操作
+                        if (pos + 1 >= len) {
+                            parsedInstructions.push({ op: 'ERR', text: '不完全なI/O命令', raw: code.slice(startPos) });
+                            break;
+                        }
+                        const op1 = code[pos++];
+                        const op2 = code[pos++];
+                        const map = {
+                            '  ': ['OUT_CHAR', 'OUT_CHAR (文字出力)'],
+                            ' \t': ['OUT_NUM', 'OUT_NUM (数値出力)'],
+                            '\t ': ['READ_CHAR', 'READ_CHAR (文字入力)'],
+                            '\t\t': ['READ_NUM', 'READ_NUM (数値入力)']
+                        };
+                        const found = map[op1 + op2];
+                        if (found) parsedInstructions.push({ op: found[0], text: found[1], raw: code.slice(startPos, pos) });
+                        else parsedInstructions.push({ op: 'ERR', text: '未知のI/O命令', raw: code.slice(startPos, pos) });
+                    }
+                } else if (imp === '\n') {
+                    // [IMP: LF] フロー制御
+                    if (pos + 1 >= len) {
+                        parsedInstructions.push({ op: 'ERR', text: '不完全なフロー制御命令', raw: code.slice(startPos) });
+                        break;
+                    }
+                    const op1 = code[pos++];
+                    const op2 = code[pos++];
+                    const pair = op1 + op2;
+
+                    if (pair === '\n\n') {
+                        parsedInstructions.push({ op: 'END', text: 'END (プログラム終了)', raw: code.slice(startPos, pos) });
+                    } else if (pair === '\t\n') {
+                        parsedInstructions.push({ op: 'RET', text: 'RET (サブルーチン復帰)', raw: code.slice(startPos, pos) });
+                    } else if (['  ', ' \t', ' \n', '\t ', '\t\t'].includes(pair)) {
+                        const lbl = readLabel();
+                        if (lbl.error) {
+                            parsedInstructions.push({ op: 'ERR', text: `ラベルエラー: ${lbl.error}`, raw: code.slice(startPos) });
+                            break;
+                        }
+                        if (pair === '  ') {
+                            const instIdx = parsedInstructions.length;
+                            labelMap[lbl.value] = instIdx;
+                            parsedInstructions.push({ op: 'LABEL', arg: lbl.value, text: `LABEL ${lbl.display}:`, raw: code.slice(startPos, pos) });
+                        } else if (pair === ' \t') {
+                            parsedInstructions.push({ op: 'CALL', arg: lbl.value, text: `CALL ${lbl.display}`, raw: code.slice(startPos, pos) });
+                        } else if (pair === ' \n') {
+                            parsedInstructions.push({ op: 'JMP', arg: lbl.value, text: `JMP ${lbl.display}`, raw: code.slice(startPos, pos) });
+                        } else if (pair === '\t ') {
+                            parsedInstructions.push({ op: 'JZ', arg: lbl.value, text: `JZ ${lbl.display} (0なら分岐)`, raw: code.slice(startPos, pos) });
+                        } else if (pair === '\t\t') {
+                            parsedInstructions.push({ op: 'JN', arg: lbl.value, text: `JN ${lbl.display} (負なら分岐)`, raw: code.slice(startPos, pos) });
+                        }
+                    } else {
+                        parsedInstructions.push({ op: 'ERR', text: '未知のフロー制御命令', raw: code.slice(startPos, pos) });
+                    }
+                }
+            }
+        }
+
+        // 逆アセンブル一覧の描画
+        function renderDisassembly() {
+            const container = document.getElementById('disasm-view');
+            document.getElementById('inst-count').textContent = `${parsedInstructions.length} instructions`;
+
+            if (parsedInstructions.length === 0) {
+                container.innerHTML = `<div class="text-slate-500 text-center py-8">コードを入力すると命令が自動解析されます</div>`;
+                return;
+            }
+
+            container.innerHTML = parsedInstructions.map((inst, idx) => {
+                const isCurrent = (!vm.halted && vm.pc === idx);
+                const isErr = (inst.op === 'ERR');
+                const rawVis = inst.raw.replace(/ /g, '␣').replace(/\t/g, '→').replace(/\n/g, '↵');
+
+                let rowClass = "px-2 py-1 rounded flex items-center justify-between gap-2 border ";
+                if (isErr) {
+                    rowClass += "bg-red-950/50 border-red-500/50 text-red-300";
+                } else if (isCurrent) {
+                    rowClass += "bg-cyan-500/20 border-cyan-400 text-white shadow-[0_0_8px_rgba(0,240,255,0.25)]";
+                } else if (inst.op === 'LABEL') {
+                    rowClass += "bg-purple-950/30 border-purple-800/40 text-purple-300";
+                } else {
+                    rowClass += "bg-slate-900/50 border-slate-800/80 text-slate-300";
+                }
+
+                return `
+                    <div id="inst-row-${idx}" class="${rowClass}">
+                        <div class="flex items-center gap-2 truncate">
+                            <span class="text-[10px] text-slate-500 w-5 text-right">${idx}</span>
+                            <span class="font-semibold truncate">${isCurrent ? '▶ ' : ''}${inst.text}</span>
+                        </div>
+                        <span class="text-[10px] text-slate-500 shrink-0">${rawVis}</span>
+                    </div>
+                `;
+            }).join('');
+
+            // 現在のPC行へ自動スクロール
+            const activeRow = document.getElementById(`inst-row-${vm.pc}`);
+            if (activeRow) {
+                activeRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+        }
+
+        /**
+         * ==========================================
+         * 5. 仮想マシン (VM) 実行エンジン
+         * ==========================================
+         */
+        function resetVM(silent = false) {
+            vm.pc = 0;
+            vm.stack = [];
+            vm.heap = {};
+            vm.callStack = [];
+            vm.steps = 0;
+            vm.halted = false;
+            vm.error = null;
+            vm.stdinBuffer = document.getElementById('stdin-input').value;
+            vm.stdinPointer = 0;
+            vm.stdout = "";
+
+            document.getElementById('stdout-output').textContent = "";
+            document.getElementById('error-box').classList.add('hidden');
+            updateVMUI("READY");
+            if (!silent) showToast("マシン状態をリセットしました", "info");
+        }
+
+        function clearOutput() {
+            vm.stdout = "";
+            document.getElementById('stdout-output').textContent = "";
+        }
+
+        // 1命令実行ロジック
+        function executeSingleStep() {
+            if (vm.halted) return false;
+
+            if (vm.steps === 0) {
+                vm.stdinBuffer = document.getElementById('stdin-input').value;
+                vm.stdinPointer = 0;
+            }
+
+            if (parsedInstructions.length === 0) {
+                vm.halted = true;
+                return false;
+            }
+
+            if (vm.pc < 0 || vm.pc >= parsedInstructions.length) {
+                setVMError("プログラムが END 命令に到達せずに終端を超えました（末尾に [LF][LF][LF] が必要です）");
+                return false;
+            }
+
+            if (vm.steps >= vm.maxSteps) {
+                setVMError(`最大ステップ数 (${vm.maxSteps}) を超えました。無限ループの可能性があります。`);
+                return false;
+            }
+
+            const inst = parsedInstructions[vm.pc];
+            vm.steps++;
+
+            if (inst.op === 'ERR') {
+                setVMError(`構文エラー (命令 #${vm.pc}): ${inst.text}`);
+                return false;
+            }
+
+            // ヘルパー：スタックポップ
+            const pop = () => {
+                if (vm.stack.length === 0) throw new Error("スタックアンダーフロー（空のスタックから値を取り出そうとしました）");
+                return vm.stack.pop();
+            };
+
+            try {
+                switch (inst.op) {
+                    case 'PUSH':
+                        vm.stack.push(inst.arg);
+                        vm.pc++;
+                        break;
+                    case 'DUP':
+                        if (vm.stack.length === 0) throw new Error("DUP失敗: スタックが空です");
+                        vm.stack.push(vm.stack[vm.stack.length - 1]);
+                        vm.pc++;
+                        break;
+                    case 'COPY': {
+                        const idx = vm.stack.length - 1 - inst.arg;
+                        if (inst.arg < 0 || idx < 0) throw new Error(`COPY失敗: インデックス ${inst.arg} が範囲外です`);
+                        vm.stack.push(vm.stack[idx]);
+                        vm.pc++;
+                        break;
+                    }
+                    case 'SWAP': {
+                        if (vm.stack.length < 2) throw new Error("SWAP失敗: スタックに2つ以上の値が必要です");
+                        const a = vm.stack.pop();
+                        const b = vm.stack.pop();
+                        vm.stack.push(a);
+                        vm.stack.push(b);
+                        vm.pc++;
+                        break;
+                    }
+                    case 'DISCARD':
+                        pop();
+                        vm.pc++;
+                        break;
+                    case 'SLIDE': {
+                        const top = pop();
+                        const count = Math.max(0, inst.arg);
+                        for (let i = 0; i < count; i++) {
+                            if (vm.stack.length > 0) vm.stack.pop();
+                        }
+                        vm.stack.push(top);
+                        vm.pc++;
+                        break;
+                    }
+                    case 'ADD': {
+                        const r = pop(), l = pop();
+                        vm.stack.push(l + r);
+                        vm.pc++;
+                        break;
+                    }
+                    case 'SUB': {
+                        const r = pop(), l = pop();
+                        vm.stack.push(l - r);
+                        vm.pc++;
+                        break;
+                    }
+                    case 'MUL': {
+                        const r = pop(), l = pop();
+                        vm.stack.push(l * r);
+                        vm.pc++;
+                        break;
+                    }
+                    case 'DIV': {
+                        const r = pop(), l = pop();
+                        if (r === 0) throw new Error("ゼロ除算エラー (DIV)");
+                        vm.stack.push(Math.floor(l / r));
+                        vm.pc++;
+                        break;
+                    }
+                    case 'MOD': {
+                        const r = pop(), l = pop();
+                        if (r === 0) throw new Error("ゼロ除算エラー (MOD)");
+                        vm.stack.push(((l % r) + r) % r);
+                        vm.pc++;
+                        break;
+                    }
+                    case 'STORE': {
+                        const val = pop();
+                        const addr = pop();
+                        vm.heap[addr] = val;
+                        vm.pc++;
+                        break;
+                    }
+                    case 'RETRIEVE': {
+                        const addr = pop();
+                        if (!(addr in vm.heap)) throw new Error(`未初期化のヒープアドレス (${addr}) を読み出そうとしました`);
+                        vm.stack.push(vm.heap[addr]);
+                        vm.pc++;
+                        break;
+                    }
+                    case 'LABEL':
+                        vm.pc++;
+                        break;
+                    case 'CALL': {
+                        if (!(inst.arg in labelMap)) throw new Error(`未定義のラベルへのCALL: ${inst.text}`);
+                        vm.callStack.push(vm.pc + 1);
+                        vm.pc = labelMap[inst.arg];
+                        break;
+                    }
+                    case 'JMP': {
+                        if (!(inst.arg in labelMap)) throw new Error(`未定義のラベルへのJUMP: ${inst.text}`);
+                        vm.pc = labelMap[inst.arg];
+                        break;
+                    }
+                    case 'JZ': {
+                        const cond = pop();
+                        if (cond === 0) {
+                            if (!(inst.arg in labelMap)) throw new Error(`未定義のラベルへのJZ: ${inst.text}`);
+                            vm.pc = labelMap[inst.arg];
+                        } else {
+                            vm.pc++;
+                        }
+                        break;
+                    }
+                    case 'JN': {
+                        const cond = pop();
+                        if (cond < 0) {
+                            if (!(inst.arg in labelMap)) throw new Error(`未定義のラベルへのJN: ${inst.text}`);
+                            vm.pc = labelMap[inst.arg];
+                        } else {
+                            vm.pc++;
+                        }
+                        break;
+                    }
+                    case 'RET': {
+                        if (vm.callStack.length === 0) throw new Error("コールスタックが空の状態でRETが呼ばれました");
+                        vm.pc = vm.callStack.pop();
+                        break;
+                    }
+                    case 'END':
+                        vm.halted = true;
+                        break;
+                    case 'OUT_CHAR': {
+                        const code = pop();
+                        vm.stdout += String.fromCharCode(code);
+                        vm.pc++;
+                        break;
+                    }
+                    case 'OUT_NUM': {
+                        const num = pop();
+                        vm.stdout += String(num);
+                        vm.pc++;
+                        break;
+                    }
+                    case 'READ_CHAR': {
+                        const addr = pop();
+                        if (vm.stdinPointer >= vm.stdinBuffer.length) {
+                            throw new Error("標準入力(STDIN)が不足しています（1文字入力待ち）");
+                        }
+                        const chCode = vm.stdinBuffer.charCodeAt(vm.stdinPointer++);
+                        vm.heap[addr] = chCode;
+                        vm.pc++;
+                        break;
+                    }
+                    case 'READ_NUM': {
+                        const addr = pop();
+                        const rem = vm.stdinBuffer.slice(vm.stdinPointer);
+                        const match = rem.match(/^\s*([+-]?\d+)/);
+                        if (!match) {
+                            throw new Error("標準入力(STDIN)から数値を読み取れません。数値が入力されているか確認してください。");
+                        }
+                        vm.stdinPointer += match[0].length;
+                        // 改行があれば1つ消費
+                        if (vm.stdinBuffer[vm.stdinPointer] === '\r') vm.stdinPointer++;
+                        if (vm.stdinBuffer[vm.stdinPointer] === '\n') vm.stdinPointer++;
+                        vm.heap[addr] = parseInt(match[1], 10);
+                        vm.pc++;
+                        break;
+                    }
+                }
+            } catch (e) {
+                setVMError(`実行時エラー (命令 #${vm.pc} ${inst.text}): ${e.message}`);
+                return false;
+            }
+
+            return !vm.halted;
+        }
+
+        function setVMError(msg) {
+            vm.error = msg;
+            vm.halted = true;
+            const errBox = document.getElementById('error-box');
+            document.getElementById('error-message').textContent = msg;
+            errBox.classList.remove('hidden');
+            updateVMUI("ERROR");
+        }
+
+        // 一括実行 (Run)
+        function runAll() {
+            if (rawCode.length === 0) {
+                showToast("実行するコードがありません", "warn");
+                return;
+            }
+            resetVM(true);
+            while (executeSingleStep()) {
+                // ループ実行
+            }
+            if (!vm.error) {
+                updateVMUI("HALTED (完了)");
+                showToast(`実行完了 (${vm.steps} ステップ)`, "success");
+            }
+        }
+
+        // ステップ実行 (Step)
+        function stepExecution() {
+            if (rawCode.length === 0) {
+                showToast("実行するコードがありません", "warn");
+                return;
+            }
+            if (vm.halted) {
+                resetVM(true);
+            }
+            const canContinue = executeSingleStep();
+            if (!vm.error) {
+                updateVMUI(canContinue ? "PAUSED (ステップ中)" : "HALTED (完了)");
+            }
+        }
+
+        // UIへのVM状態反映
+        function updateVMUI(statusText) {
+            document.getElementById('step-counter').textContent = vm.steps;
+            const badge = document.getElementById('vm-status-badge');
+            badge.textContent = statusText;
+            
+            badge.className = "px-2 py-0.5 rounded font-bold border ";
+            if (statusText.includes("ERROR")) {
+                badge.className += "bg-red-950 text-red-300 border-red-500/50";
+            } else if (statusText.includes("HALTED")) {
+                badge.className += "bg-emerald-950 text-emerald-300 border-emerald-500/50";
+            } else if (statusText.includes("PAUSED")) {
+                badge.className += "bg-amber-950 text-amber-300 border-amber-500/50";
+            } else {
+                badge.className += "bg-slate-800 text-slate-300 border-slate-700";
+            }
+
+            // STDOUT更新
+            const outEl = document.getElementById('stdout-output');
+            outEl.textContent = vm.stdout;
+            outEl.scrollTop = outEl.scrollHeight;
+
+            // スタック描画
+            const stackView = document.getElementById('stack-view');
+            document.getElementById('stack-count').textContent = `${vm.stack.length} items`;
+            if (vm.stack.length === 0) {
+                stackView.innerHTML = `<div class="text-slate-600 text-center my-auto text-[11px]">EMPTY</div>`;
+            } else {
+                stackView.innerHTML = vm.stack.map((val, idx) => {
+                    const isTop = (idx === vm.stack.length - 1);
+                    const charHint = (val >= 32 && val <= 126) ? ` '${String.fromCharCode(val)}'` : '';
+                    return `
+                        <div class="px-2 py-1 rounded flex justify-between items-center ${isTop ? 'bg-cyan-500/20 border border-cyan-400/60 text-cyan-200 font-bold' : 'bg-slate-900 border border-slate-800 text-slate-300'}">
+                            <span class="text-[10px] text-slate-500">[${idx}]</span>
+                            <span>${val}<span class="text-[10px] text-slate-400">${charHint}</span></span>
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            // ヒープ描画
+            const heapView = document.getElementById('heap-view');
+            const keys = Object.keys(vm.heap);
+            document.getElementById('heap-count').textContent = `${keys.length} keys`;
+            if (keys.length === 0) {
+                heapView.innerHTML = `<div class="text-slate-600 text-center my-auto text-[11px]">EMPTY</div>`;
+            } else {
+                heapView.innerHTML = keys.map(k => {
+                    const val = vm.heap[k];
+                    return `
+                        <div class="px-2 py-1 rounded bg-purple-950/30 border border-purple-800/40 flex justify-between items-center text-purple-200">
+                            <span class="text-[10px] text-purple-400">addr[${k}]</span>
+                            <span class="font-bold">${val}</span>
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            // 逆アセンブル行のハイライト更新
+            renderDisassembly();
+        }
+
+        /**
+         * ==========================================
+         * 6. サンプルプログラム集（プリセット生成）
+         * ==========================================
+         */
+        function loadPreset(key) {
+            if (!key) return;
+            let code = "";
+            let defaultStdin = "";
+            let desc = "";
+
+            if (key === 'hello') {
+                // "Hello, World!\n" の各文字コードをPushしてOutChar
+                const msg = "Hello, World!\n";
+                for (let i = 0; i < msg.length; i++) {
+                    code += '  ' + encodeNumberToWS(msg.charCodeAt(i)) + '\t\n  ';
+                }
+                code += '\n\n\n';
+                desc = "Hello, World! をロードしました";
+            } else if (key === 'count') {
+                // 1から10までカウントアップ出力
+                // Push 1 -> Label 0 -> Dup -> OutNum -> Push 32(' ') -> OutChar -> Push 1 -> Add -> Dup -> Push 11 -> Sub -> JN Label 0 -> Discard -> End
+                const L0 = encodeLabelToWS(0);
+                code += '  ' + encodeNumberToWS(1);       // Push 1
+                code += '\n  ' + L0;                      // Label 0
+                code += ' \n ';                           // Dup
+                code += '\t\n \t';                        // OutNum
+                code += '  ' + encodeNumberToWS(32);      // Push ' '
+                code += '\t\n  ';                         // OutChar
+                code += '  ' + encodeNumberToWS(1);       // Push 1
+                code += '\t   ';                          // Add
+                code += ' \n ';                           // Dup
+                code += '  ' + encodeNumberToWS(11);      // Push 11
+                code += '\t  \t';                         // Sub (current - 11)
+                code += '\n\t\t' + L0;                    // JN Label 0 (11未満ならループ)
+                code += ' \n\n';                          // Discard
+                code += '\n\n\n';                         // End
+                desc = "1から10までカウントアップをロードしました";
+            } else if (key === 'add') {
+                // 入力された2つの数値の足し算
+                // Push 0 -> ReadNum -> Push 1 -> ReadNum -> Push 0 -> Retrieve -> Push 1 -> Retrieve -> Add -> OutNum -> End
+                code += '  ' + encodeNumberToWS(0) + '\t\n\t\t'; // addr 0 に数値1読込
+                code += '  ' + encodeNumberToWS(1) + '\t\n\t\t'; // addr 1 に数値2読込
+                code += '  ' + encodeNumberToWS(0) + '\t\t\t';   // addr 0 取得
+                code += '  ' + encodeNumberToWS(1) + '\t\t\t';   // addr 1 取得
+                code += '\t   ';                                 // Add
+                code += '\t\n \t';                               // OutNum
+                code += '\n\n\n';                                // End
+                defaultStdin = "18\n24";
+                desc = "入力2数値の足し算をロードしました（STDINに 18 と 24 をセット）";
+            } else if (key === 'fib') {
+                // フィボナッチ数列（10個出力）
+                // ヒープ addr 0 = a (0), addr 1 = b (1), スタックトップ = カウンタ (10)
+                const L0 = encodeLabelToWS(0);
+                code += '  ' + encodeNumberToWS(0) + '  ' + encodeNumberToWS(0) + '\t\t '; // heap[0] = 0
+                code += '  ' + encodeNumberToWS(1) + '  ' + encodeNumberToWS(1) + '\t\t '; // heap[1] = 1
+                code += '  ' + encodeNumberToWS(10);                                       // counter = 10
+                code += '\n  ' + L0;                                                       // Label 0:
+                code += '  ' + encodeNumberToWS(0) + '\t\t\t';                             // push heap[0]
+                code += '\t\n \t';                                                         // OutNum
+                code += '  ' + encodeNumberToWS(32) + '\t\n  ';                            // OutChar(' ')
+                // next = heap[0] + heap[1]
+                code += '  ' + encodeNumberToWS(0) + '\t\t\t';                             // push a
+                code += '  ' + encodeNumberToWS(1) + '\t\t\t';                             // push b
+                code += '\t   ';                                                           // push a+b
+                // heap[0] = heap[1]
+                code += '  ' + encodeNumberToWS(0) + '  ' + encodeNumberToWS(1) + '\t\t\t\t\t ';
+                // heap[1] = next (スタック上の a+b を heap[1] へ)
+                code += '  ' + encodeNumberToWS(1) + ' \n\t\t\t ';
+                // counter--
+                code += '  ' + encodeNumberToWS(1) + '\t  \t';                             // counter - 1
+                code += ' \n ';                                                            // Dup counter
+                code += '\n\t ' + encodeLabelToWS(1);                                      // JZ Label 1 (終了)
+                code += '\n \n' + L0;                                                      // JMP Label 0
+                code += '\n  ' + encodeLabelToWS(1);                                       // Label 1:
+                code += ' \n\n';                                                           // Discard counter
+                code += '\n\n\n';                                                          // End
+                desc = "フィボナッチ数列(10項)をロードしました";
+            }
+
+            rawCode = code;
+            if (defaultStdin) {
+                document.getElementById('stdin-input').value = defaultStdin;
+            }
+            syncEditorFromCode();
+            resetVM(true);
+            document.getElementById('preset-select').value = "";
+            showToast(desc, "info");
+        }
+
+        // 初期ロード時に「Hello, World!」をセットしてすぐ試せる状態にする
+        window.addEventListener('DOMContentLoaded', () => {
+            loadPreset('hello');
+        });
+    </script>
+</body>
+</html>
